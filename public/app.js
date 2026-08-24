@@ -385,7 +385,7 @@ forgotForm.addEventListener('submit', async (e) => {
 
     showAuthStep('reset');
     document.getElementById('reset-token').value = '';
-    resetTokenHint.textContent = 'Check your email for the reset token and paste it below.';
+    resetTokenHint.textContent = 'Check your email for the reset link and paste the token here if needed.';
     showToast(data.message || 'Password reset email requested.', 'success');
   } catch {
     forgotError.textContent = 'Network error while requesting reset.';

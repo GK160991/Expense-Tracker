@@ -3,7 +3,7 @@ const express = require('express');
 const session = require('express-session');
 const path = require('path');
 const nodemailer = require('nodemailer');
-const db = require('./db');
+const { query } = require('./db');
 const { hashPassword, verifyPassword, generateResetToken } = require('./auth');
 
 const app = express();
@@ -28,18 +28,35 @@ function sendResetEmail(email, token) {
     return Promise.resolve(false);
   }
 
-  const resetUrl = process.env.APP_BASE_URL || 'http://localhost:3000';
+  const resetUrl = `${(process.env.APP_BASE_URL || 'http://localhost:3000')}/?reset_token=${encodeURIComponent(token)}`;
 
   return transporter.sendMail({
     from: `Manage Expense <${process.env.GMAIL_USER}>`,
     to: email,
-    subject: 'Your password reset token',
-    text: `Use the following reset token to reset your password: ${token}\n\nOr open: ${resetUrl}\n\nThis token expires in 15 minutes.`,
+    subject: 'Reset your password',
+    text: `Use the following link to reset your password: ${resetUrl}\n\nThis link expires in 15 minutes.`,
     html: `
-      <p>Use the following reset token to reset your password:</p>
-      <p><strong>${token}</strong></p>
-      <p>This token expires in 15 minutes.</p>
-      <p>Open the app and paste this token in the reset form.</p>
+      <p>Click the link below to reset your password:</p>
+      <p><a href="${resetUrl}">${resetUrl}</a></p>
+      <p>This link expires in 15 minutes.</p>
+    `,
+  });
+}
+
+function sendLoginEmail(email, firstName) {
+  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+    console.warn('GMAIL_USER or GMAIL_APP_PASSWORD is not configured. Login email was not sent.');
+    return Promise.resolve(false);
+  }
+
+  return transporter.sendMail({
+    from: `Manage Expense <${process.env.GMAIL_USER}>`,
+    to: email,
+    subject: 'Welcome back to Manage Expense',
+    text: `Hello ${firstName},\n\nYou have successfully logged in to Manage Expense.`,
+    html: `
+      <p>Hello ${firstName},</p>
+      <p>You have successfully logged in to Manage Expense.</p>
     `,
   });
 }
@@ -72,7 +89,7 @@ function requireAuth(req, res, next) {
 
 // ---- Auth routes ----
 
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   const firstName = typeof req.body.firstName === 'string' ? req.body.firstName.trim() : '';
   const lastName = typeof req.body.lastName === 'string' ? req.body.lastName.trim() : '';
   const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
@@ -90,25 +107,28 @@ app.post('/api/auth/register', (req, res) => {
     return res.status(400).json({ error: errors.join(' ') });
   }
 
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-  if (existing) {
+  const existing = await query('SELECT id FROM users WHERE email = $1', [email]);
+  if (existing.rows.length) {
     return res.status(409).json({ error: 'An account with that email already exists.' });
   }
 
   const passwordHash = hashPassword(password);
-  const result = db
-    .prepare('INSERT INTO users (first_name, last_name, email, password_hash) VALUES (?, ?, ?, ?)')
-    .run(firstName, lastName, email, passwordHash);
-  db.prepare('INSERT INTO user_settings (user_id, monthly_budget) VALUES (?, 0)').run(result.lastInsertRowid);
+  const result = await query(
+    'INSERT INTO users (first_name, last_name, email, password_hash) VALUES ($1, $2, $3, $4) RETURNING id',
+    [firstName, lastName, email, passwordHash]
+  );
+
+  await query('INSERT INTO user_settings (user_id, monthly_budget) VALUES ($1, 0)', [result.rows[0].id]);
 
   res.status(201).json({ message: 'Sign up successful. Please log in with your email and password.' });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
   const password = typeof req.body.password === 'string' ? req.body.password : '';
 
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  const userResult = await query('SELECT * FROM users WHERE email = $1', [email]);
+  const user = userResult.rows[0];
   if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ error: 'Invalid email or password.' });
   }
@@ -117,6 +137,11 @@ app.post('/api/auth/login', (req, res) => {
   req.session.firstName = user.first_name;
   req.session.lastName = user.last_name;
   req.session.email = user.email;
+
+  sendLoginEmail(user.email, user.first_name).catch((error) => {
+    console.error('Failed to send login email:', error);
+  });
+
   res.json({ firstName: user.first_name, lastName: user.last_name, email: user.email });
 });
 
@@ -135,15 +160,16 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   }
 
   const genericMessage = 'If that email is registered, a password reset email has been sent.';
-  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+  const userResult = await query('SELECT id, email FROM users WHERE email = $1', [email]);
+  const user = userResult.rows[0];
   if (!user) {
     return res.json({ message: genericMessage });
   }
 
   const token = generateResetToken();
   const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS).toISOString();
-  db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(user.id);
-  db.prepare('INSERT INTO password_resets (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, user.id, expiresAt);
+  await query('DELETE FROM password_resets WHERE user_id = $1', [user.id]);
+  await query('INSERT INTO password_resets (token, user_id, expires_at) VALUES ($1, $2, $3)', [token, user.id, expiresAt]);
 
   try {
     await sendResetEmail(email, token);
@@ -154,7 +180,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   }
 });
 
-app.post('/api/auth/reset-password', (req, res) => {
+app.post('/api/auth/reset-password', async (req, res) => {
   const token = typeof req.body.token === 'string' ? req.body.token.trim() : '';
   const password = typeof req.body.password === 'string' ? req.body.password : '';
 
@@ -165,14 +191,15 @@ app.post('/api/auth/reset-password', (req, res) => {
     return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   }
 
-  const record = db.prepare('SELECT * FROM password_resets WHERE token = ?').get(token);
+  const recordResult = await query('SELECT * FROM password_resets WHERE token = $1', [token]);
+  const record = recordResult.rows[0];
   if (!record || new Date(record.expires_at).getTime() < Date.now()) {
     return res.status(400).json({ error: 'That reset token is invalid or has expired.' });
   }
 
   const passwordHash = hashPassword(password);
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, record.user_id);
-  db.prepare('DELETE FROM password_resets WHERE token = ?').run(token);
+  await query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, record.user_id]);
+  await query('DELETE FROM password_resets WHERE token = $1', [token]);
   res.json({ message: 'Password updated. You can now log in.' });
 });
 
@@ -210,68 +237,71 @@ function validateExpense(body) {
 }
 
 // GET /api/expenses - list, supports ?category=&from=&to=
-app.get('/api/expenses', requireAuth, (req, res) => {
+app.get('/api/expenses', requireAuth, async (req, res) => {
   const { category, from, to } = req.query;
-  let query = 'SELECT * FROM expenses WHERE user_id = ?';
+  let sql = 'SELECT * FROM expenses WHERE user_id = $1';
   const params = [req.session.userId];
 
   if (category) {
-    query += ' AND category = ?';
+    sql += ' AND category = $' + (params.length + 1);
     params.push(category);
   }
   if (from) {
-    query += ' AND date >= ?';
+    sql += ' AND date >= $' + (params.length + 1);
     params.push(from);
   }
   if (to) {
-    query += ' AND date <= ?';
+    sql += ' AND date <= $' + (params.length + 1);
     params.push(to);
   }
-  query += ' ORDER BY date DESC, id DESC';
+  sql += ' ORDER BY date DESC, id DESC';
 
-  const rows = db.prepare(query).all(...params);
-  res.json(rows);
+  const result = await query(sql, params);
+  res.json(result.rows);
 });
 
 // GET /api/expenses/summary - totals by category, grand total, and current-month budget usage
-app.get('/api/expenses/summary', requireAuth, (req, res) => {
+app.get('/api/expenses/summary', requireAuth, async (req, res) => {
   const userId = req.session.userId;
-  const byCategory = db
-    .prepare('SELECT category, SUM(amount) AS total FROM expenses WHERE user_id = ? GROUP BY category ORDER BY total DESC')
-    .all(userId);
-  const grandTotalRow = db.prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE user_id = ?').get(userId);
+  const byCategoryResult = await query(
+    'SELECT category, SUM(amount) AS total FROM expenses WHERE user_id = $1 GROUP BY category ORDER BY total DESC',
+    [userId]
+  );
+  const grandTotalResult = await query('SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE user_id = $1', [userId]);
 
-  const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
-  const currentMonthRow = db
-    .prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE user_id = ? AND substr(date, 1, 7) = ?")
-    .get(userId, monthPrefix);
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  const currentMonthResult = await query(
+    'SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE user_id = $1 AND SUBSTRING(date FROM 1 FOR 7) = $2',
+    [userId, monthPrefix]
+  );
 
-  const settings = db.prepare('SELECT monthly_budget FROM user_settings WHERE user_id = ?').get(userId);
-  const monthlyBudget = settings ? settings.monthly_budget : 0;
-  const budgetUsedPercent = monthlyBudget > 0 ? Math.round((currentMonthRow.total / monthlyBudget) * 100) : null;
+  const settingsResult = await query('SELECT monthly_budget FROM user_settings WHERE user_id = $1', [userId]);
+  const monthlyBudget = settingsResult.rows[0] ? settingsResult.rows[0].monthly_budget : 0;
+  const currentMonthTotal = Number(currentMonthResult.rows[0]?.total || 0);
+  const budgetUsedPercent = monthlyBudget > 0 ? Math.round((currentMonthTotal / monthlyBudget) * 100) : null;
 
   res.json({
-    byCategory,
-    grandTotal: grandTotalRow.total,
-    currentMonthTotal: currentMonthRow.total,
+    byCategory: byCategoryResult.rows,
+    grandTotal: Number(grandTotalResult.rows[0]?.total || 0),
+    currentMonthTotal,
     monthlyBudget,
     budgetUsedPercent,
   });
 });
 
 // GET /api/settings - fetch monthly budget
-app.get('/api/settings', requireAuth, (req, res) => {
-  const settings = db.prepare('SELECT monthly_budget FROM user_settings WHERE user_id = ?').get(req.session.userId);
-  res.json(settings || { monthly_budget: 0 });
+app.get('/api/settings', requireAuth, async (req, res) => {
+  const settingsResult = await query('SELECT monthly_budget FROM user_settings WHERE user_id = $1', [req.session.userId]);
+  res.json(settingsResult.rows[0] || { monthly_budget: 0 });
 });
 
 // PUT /api/settings - update monthly budget
-app.put('/api/settings', requireAuth, (req, res) => {
+app.put('/api/settings', requireAuth, async (req, res) => {
   const budget = Number(req.body.monthly_budget);
   if (Number.isNaN(budget) || budget < 0) {
     return res.status(400).json({ error: 'Monthly budget must be a non-negative number.' });
   }
-  db.prepare('UPDATE user_settings SET monthly_budget = ? WHERE user_id = ?').run(budget, req.session.userId);
+  await query('UPDATE user_settings SET monthly_budget = $1 WHERE user_id = $2', [budget, req.session.userId]);
   res.json({ monthly_budget: budget });
 });
 
