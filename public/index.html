@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Manage Expense</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Manage Expense</div>
+  </header>
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- Auth view -->
+  <main class="container auth-container" id="auth-view">
+    <div class="card auth-card">
+      <div class="auth-toggle">
+        <button type="button" class="auth-toggle-btn active" data-auth-tab="login">Log In</button>
+        <button type="button" class="auth-toggle-btn" data-auth-tab="register">Sign Up</button>
+      </div>
+
+      <form id="login-form" class="auth-form" novalidate>
+        <h3>Log In</h3>
+        <div class="field">
+          <label for="login-email">Email</label>
+          <input type="email" id="login-email" required />
+        </div>
+        <div class="field">
+          <label for="login-password">Password</label>
+          <input type="password" id="login-password" required />
+        </div>
+        <span class="field-error" id="login-error"></span>
+        <div class="form-actions">
+          <button type="submit">Log In</button>
+        </div>
+        <p class="hint"><a href="#" id="goto-forgot">Forgot your password?</a></p>
+      </form>
+
+      <form id="register-form" class="auth-form" hidden novalidate>
+        <h3>Sign Up</h3>
+        <div class="field">
+          <label for="register-first-name">First Name</label>
+          <input type="text" id="register-first-name" maxlength="50" required />
+        </div>
+        <div class="field">
+          <label for="register-last-name">Last Name</label>
+          <input type="text" id="register-last-name" maxlength="50" required />
+        </div>
+        <div class="field">
+          <label for="register-email">Email</label>
+          <input type="email" id="register-email" required />
+        </div>
+        <div class="field">
+          <label for="register-password">Password</label>
+          <input type="password" id="register-password" minlength="6" required />
+        </div>
+        <span class="field-error" id="register-error"></span>
+        <div class="form-actions">
+          <button type="submit">Create Account</button>
+        </div>
+      </form>
+
+      <form id="forgot-form" class="auth-form" hidden novalidate>
+        <h3>Forgot Password</h3>
+        <p class="hint">Enter your account email to generate a reset token.</p>
+        <div class="field">
+          <label for="forgot-email">Email</label>
+          <input type="email" id="forgot-email" required />
+        </div>
+        <span class="field-error" id="forgot-error"></span>
+        <div class="form-actions">
+          <button type="submit">Send Reset Token</button>
+        </div>
+      </form>
+
+      <form id="reset-form" class="auth-form" hidden novalidate>
+        <h3>Reset Password</h3>
+        <p class="hint" id="reset-token-hint"></p>
+        <div class="field">
+          <label for="reset-token">Reset Token</label>
+          <input type="text" id="reset-token" required />
+        </div>
+        <div class="field">
+          <label for="reset-password">New Password</label>
+          <input type="password" id="reset-password" minlength="6" required />
+        </div>
+        <span class="field-error" id="reset-error"></span>
+        <div class="form-actions">
+          <button type="submit">Reset Password</button>
+          <button type="button" id="back-to-login" class="secondary">Back to Log In</button>
+        </div>
+      </form>
+    </div>
+  </main>
+
+  <main class="container" id="app-view" hidden>
+    <div class="app-header">
+      <nav class="tabs" id="app-tabs">
+        <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+        <button class="tab-btn" data-tab="expenses">Expenses</button>
+        <button class="tab-btn" data-tab="settings">Settings</button>
+      </nav>
+      <div class="user-box" id="user-box">
+        <span id="current-username"></span>
+        <button type="button" id="logout-btn" class="secondary">Log out</button>
+      </div>
+    </div>
+
+    <!-- Dashboard tab -->
+    <section id="tab-dashboard" class="tab-panel active">
+      <div class="card-grid">
+        <div class="card">
+          <h3>Total Spent (All Time)</h3>
+          <p class="stat">$<span id="grand-total">0.00</span></p>
+        </div>
+        <div class="card">
+          <h3>This Month</h3>
+          <p class="stat">$<span id="month-total">0.00</span></p>
+          <div class="progress" id="budget-progress-wrap" hidden>
+            <div class="progress-bar" id="budget-progress-bar"></div>
+          </div>
+          <p class="hint" id="budget-hint"></p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Spending by Category</h3>
+        <ul id="category-summary" class="category-list"></ul>
+        <p id="no-category-data" class="empty-state" hidden>No expenses recorded yet.</p>
+      </div>
+    </section>
+
+    <!-- Expenses tab -->
+    <section id="tab-expenses" class="tab-panel">
+      <div class="card">
+        <h3 id="form-title">Add Expense</h3>
+        <form id="expense-form" novalidate>
+          <input type="hidden" id="expense-id" />
+
+          <div class="field">
+            <label for="description">Description</label>
+            <input type="text" id="description" maxlength="200" required />
+            <span class="field-error" id="err-description"></span>
+          </div>
+
+          <div class="field">
+            <label for="amount">Amount ($)</label>
+            <input type="number" id="amount" step="0.01" min="0.01" required />
+            <span class="field-error" id="err-amount"></span>
+          </div>
+
+          <div class="field">
+            <label for="category">Category</label>
+            <input type="text" id="category" list="category-options" maxlength="50" required />
+            <datalist id="category-options">
+              <option value="Food"></option>
+              <option value="Transport"></option>
+              <option value="Entertainment"></option>
+              <option value="Utilities"></option>
+              <option value="Other"></option>
+            </datalist>
+            <span class="field-error" id="err-category"></span>
+          </div>
+
+          <div class="field">
+            <label for="date">Date</label>
+            <input type="date" id="date" required />
+            <span class="field-error" id="err-date"></span>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" id="submit-btn">Add Expense</button>
+            <button type="button" id="cancel-edit" class="secondary" hidden>Cancel</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3>Filter</h3>
+        <div class="filter-row">
+          <input type="text" id="filter-category" placeholder="Category" />
+          <input type="date" id="filter-from" />
+          <input type="date" id="filter-to" />
+          <button type="button" id="apply-filter">Apply</button>
+          <button type="button" id="clear-filter" class="secondary">Clear</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Expenses</h3>
+        <div class="table-wrap">
+          <table id="expense-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Description</th>
+                <th>Category</th>
+                <th>Amount</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="expense-tbody"></tbody>
+          </table>
+        </div>
+        <p id="no-expense-data" class="empty-state" hidden>No expenses match your filters.</p>
+      </div>
+    </section>
+
+    <!-- Settings tab -->
+    <section id="tab-settings" class="tab-panel">
+      <div class="card">
+        <h3>Monthly Budget</h3>
+        <p class="hint">Set a monthly budget to see how your current spending compares.</p>
+        <form id="settings-form" novalidate>
+          <div class="field">
+            <label for="monthly-budget">Monthly Budget ($)</label>
+            <input type="number" id="monthly-budget" step="0.01" min="0" />
+            <span class="field-error" id="err-monthly-budget"></span>
+          </div>
+          <div class="form-actions">
+            <button type="submit">Save Budget</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
