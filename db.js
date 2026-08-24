@@ -1,7 +1,13 @@
 const path = require('path');
+const os = require('os');
 const { DatabaseSync } = require('node:sqlite');
 
-const db = new DatabaseSync(path.join(__dirname, 'expenses.db'));
+const dbPath = process.env.DB_PATH || path.join(
+  process.env.NODE_ENV === 'production' ? os.tmpdir() : __dirname,
+  'expenses.db'
+);
+
+const db = new DatabaseSync(dbPath);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (

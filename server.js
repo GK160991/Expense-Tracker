@@ -1,6 +1,8 @@
+require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
 const path = require('path');
+const nodemailer = require('nodemailer');
 const db = require('./db');
 const { hashPassword, verifyPassword, generateResetToken } = require('./auth');
 
@@ -10,6 +12,39 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const RESET_TOKEN_TTL_MS = 15 * 60 * 1000;
 
+const transporter = nodemailer.createTransport({
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD,
+  },
+});
+
+function sendResetEmail(email, token) {
+  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+    console.warn('GMAIL_USER or GMAIL_APP_PASSWORD is not configured. Password reset email was not sent.');
+    return Promise.resolve(false);
+  }
+
+  const resetUrl = process.env.APP_BASE_URL || 'http://localhost:3000';
+
+  return transporter.sendMail({
+    from: `Manage Expense <${process.env.GMAIL_USER}>`,
+    to: email,
+    subject: 'Your password reset token',
+    text: `Use the following reset token to reset your password: ${token}\n\nOr open: ${resetUrl}\n\nThis token expires in 15 minutes.`,
+    html: `
+      <p>Use the following reset token to reset your password:</p>
+      <p><strong>${token}</strong></p>
+      <p>This token expires in 15 minutes.</p>
+      <p>Open the app and paste this token in the reset form.</p>
+    `,
+  });
+}
+
+app.set('trust proxy', 1);
 app.use(express.json());
 app.use(
   session({
@@ -17,7 +52,12 @@ app.use(
     secret: process.env.SESSION_SECRET || 'dev-only-secret-change-me',
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 24 },
+    cookie: {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 1000 * 60 * 60 * 24,
+    },
   })
 );
 app.use(express.static(path.join(__dirname, 'public')));
@@ -88,13 +128,13 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 // requests a reset token for an email; same response whether or not the email exists, to avoid leaking registered accounts
-app.post('/api/auth/forgot-password', (req, res) => {
+app.post('/api/auth/forgot-password', async (req, res) => {
   const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
   if (!EMAIL_RE.test(email)) {
     return res.status(400).json({ error: 'A valid email address is required.' });
   }
 
-  const genericMessage = 'If that email is registered, a password reset token has been created.';
+  const genericMessage = 'If that email is registered, a password reset email has been sent.';
   const user = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
   if (!user) {
     return res.json({ message: genericMessage });
@@ -105,8 +145,13 @@ app.post('/api/auth/forgot-password', (req, res) => {
   db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(user.id);
   db.prepare('INSERT INTO password_resets (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, user.id, expiresAt);
 
-  // NOTE: a production app would email this token instead of returning it in the response.
-  res.json({ message: genericMessage, token });
+  try {
+    await sendResetEmail(email, token);
+    return res.json({ message: genericMessage });
+  } catch (error) {
+    console.error('Failed to send password reset email:', error);
+    return res.status(500).json({ error: 'Unable to send password reset email right now. Please try again later.' });
+  }
 });
 
 app.post('/api/auth/reset-password', (req, res) => {
@@ -276,7 +321,11 @@ app.delete('/api/expenses/:id', requireAuth, (req, res) => {
   res.status(204).send();
 });
 
-app.listen(PORT, () => {
-  console.log(`Manage Expense running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Manage Expense running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
 

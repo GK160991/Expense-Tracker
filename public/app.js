@@ -384,14 +384,9 @@ forgotForm.addEventListener('submit', async (e) => {
     }
 
     showAuthStep('reset');
-    if (data.token) {
-      document.getElementById('reset-token').value = data.token;
-      resetTokenHint.textContent = 'Demo mode: your reset token has been filled in below (a real app would email it).';
-    } else {
-      document.getElementById('reset-token').value = '';
-      resetTokenHint.textContent = data.message || 'If that email is registered, check it for a reset token.';
-    }
-    showToast(data.message || 'Reset token requested.', 'success');
+    document.getElementById('reset-token').value = '';
+    resetTokenHint.textContent = 'Check your email for the reset token and paste it below.';
+    showToast(data.message || 'Password reset email requested.', 'success');
   } catch {
     forgotError.textContent = 'Network error while requesting reset.';
   }
